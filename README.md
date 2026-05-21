@@ -18,7 +18,7 @@ All solutions are written in C++. In particular, each solution is stored as
 | codeforces | https://codeforces.com/     | Empty  |
 | csacademy  | https://csacademy.com/      | Done   |
 | cses       | https://cses.fi/            | Empty  |
-| kilonova   | https://kilonova.ro/        | Empty  |
+| kilonova   | https://kilonova.ro/        | Done   |
 | ojuz       | https://oj.uz/              | Done   |
 | olinfo     | https://training.olinfo.it/ | Empty  |
 | spoj       | https://www.spoj.com/       | Empty  |
