@@ -19,7 +19,7 @@ All solutions are written in C++. In particular, each solution is stored as
 | cses       | https://cses.fi/            | Empty  |
 | csacademy  | https://csacademy.com/      | Empty  |
 | kilonova   | https://kilonova.ro/        | Empty  |
-| ojuz       | https://oj.uz/              | Empty  |
+| ojuz       | https://oj.uz/              | Done   |
 | olinfo     | https://training.olinfo.it/ | Empty  |
 | spoj       | https://www.spoj.com/       | Empty  |
 | szkopul    | https://szkopul.edu.pl/     | Empty  |
