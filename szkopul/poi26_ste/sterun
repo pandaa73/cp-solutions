@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+# Wersja: 1.2
+# Data: 18.03.2026
+
+import argparse
+import os
+import signal
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+# Skrypt uruchamia N kopii programu i interaktor soc.
+# Kompilacja i uruchamianie odbywa sie w katalogu skryptu.
+# Sciezki argumentow sa wzgledne do cwd, chyba ze podasz absolutna.
+# Strumienie: soc czyta stdin i pisze stdout; programy maja stdin/stdout
+# podlaczone do soc. Stderr domyslnie idzie na terminal, ale mozna
+# go przekierowac flaga --err.
+
+# Stale konfiguracyjne skryptu.
+
+TASKID = "ste"
+N = 2
+
+RUN_NAME = f"{TASKID}run"
+
+EXT_CPP = ".cpp"
+EXT_PY = ".py"
+EXT_EXE = ".e"
+
+SIGPIPE_RC = -signal.SIGPIPE  # -13 na Linuksie
+
+
+def find_cxx() -> str:
+    # Szukamy dostepnego kompilatora C++ w PATH.
+    for name in ["g++-14", "g++"]:
+        if path := shutil.which(name):
+            return path
+    raise SystemExit("Brak kompilatora g++.")
+
+
+def resolve_program(arg: str, base_dir: Path) -> Path:
+    # Rozpoznaje plik programu, dopisujac .cpp/.py/.e dla nazwy bez rozszerzenia.
+    arg_path = Path(arg)
+    root = arg_path if arg_path.is_absolute() else (base_dir / arg_path)
+    suffix = arg_path.suffix.lower()
+
+    # Gdy rozszerzenie jest podane, szukamy tylko tego pliku.
+    if suffix in (EXT_CPP, EXT_PY, EXT_EXE):
+        if root.exists() and root.is_file():
+            return root.resolve()
+        raise SystemExit(f"Plik nie istnieje: {arg}")
+
+    # Gdy brak rozszerzenia, probujemy po kolei: .cpp, .py, .e.
+    for ext in (EXT_CPP, EXT_PY, EXT_EXE):
+        cand = root.with_suffix(ext)
+        if cand.exists() and cand.is_file():
+            return cand.resolve()
+    raise SystemExit(f"Nie znaleziono programu: {arg}")
+
+
+def compile_cpp(src: Path, exe: Path) -> None:
+    # Kompiluje .cpp do .e.
+    cxx = find_cxx()
+    # -static nie dziala na macOS (brak crt0.o), wiec pomijamy je na darwin.
+    base_flags = ["-O3", "-std=c++23"]
+    if sys.platform != "darwin":
+        base_flags.insert(1, "-static")
+    cmd = [cxx] + base_flags
+    cmd += [str(src), "-o", str(exe)]
+    subprocess.run(cmd, check=True)
+
+
+def build_command(path: Path, *, output_dir: Path) -> list:
+    # Buduje komende uruchomienia dla .cpp/.py/.e.
+    suffix = path.suffix.lower()
+    if suffix == EXT_CPP:
+        exe = output_dir / f"{path.stem}{EXT_EXE}"
+        compile_cpp(path, exe)
+        return [str(exe)]
+    if suffix == EXT_PY:
+        return [sys.executable, str(path)]
+    if suffix == EXT_EXE:
+        if not os.access(path, os.X_OK):
+            raise SystemExit(f"Brak prawa wykonania: {path}")
+        return [str(path)]
+    raise SystemExit(f"Nieobslugiwany typ pliku: {path}")
+
+
+def close_fd(fd: int) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def cleanup_pipes(pipes) -> None:
+    for out_r, in_w in pipes:
+        close_fd(out_r)
+        close_fd(in_w)
+
+
+def terminate_procs(procs) -> None:
+    for proc in procs:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+
+def format_rc(rc: int) -> str:
+    if rc < 0:
+        return f"sygnal {-rc}"
+    return f"kod {rc}"
+
+
+def classify_rc(rc: int) -> str:
+    """Klasyfikuje kod wyjscia: 'ok', 'sigpipe' lub 'error'."""
+    if rc == 0:
+        return "ok"
+    if rc == SIGPIPE_RC:
+        return "sigpipe"
+    return "error"
+
+
+def combined_user_status(rc_list: list) -> str:
+    """Laczy statusy N programow uzytkownika. Priorytet: error > sigpipe > ok."""
+    has_error = any(classify_rc(rc) == "error" for rc in rc_list)
+    has_sigpipe = any(classify_rc(rc) == "sigpipe" for rc in rc_list)
+    if has_error:
+        return "error"
+    if has_sigpipe:
+        return "sigpipe"
+    return "ok"
+
+
+def main() -> int:
+    # Budujemy parser i pomoc.
+    epilog = (
+        "Przyklady:\n"
+        f"  ./{RUN_NAME} {TASKID}.cpp\n"
+        f"  ./{RUN_NAME} {TASKID} < in.in > out.out\n"
+        f"  ./{RUN_NAME} {TASKID}.cpp -s mysoc.cpp\n"
+        f"  ./{RUN_NAME} {TASKID}.py -i ../in/{TASKID}0a.in -o out.txt\n"
+        f"  ./{RUN_NAME} {TASKID}.e -e all.err\n"
+        "\n"
+        "Uwagi:\n"
+        "  - Na serwezrze jest uzywany inny interaktor\n"
+        "  - Nazwa programu bez rozszerzenia szuka: .cpp, .py, .e (w tej kolejnosci).\n"
+        "  - Nazwa programu może być dowolna.\n"
+        "  - Dla .cpp kompilacja do pliku .e w katalogu skryptu.\n"
+        f"  - Domyslny interaktor ({TASKID}soc) jest szukany w katalogu skryptu.\n"
+        "  - Wzgledne sciezki argumentow sa liczone od cwd.\n"
+    )
+    parser = argparse.ArgumentParser(
+        description=f"Kompiluje program i uruchamia {N} kopie z interaktorem (domyslnie {TASKID}soc).\nInteraktor komunikuje sie z programami przez pipe'y. A z stdin czyta test.",
+        epilog=epilog,
+        formatter_class=lambda prog: argparse.RawTextHelpFormatter(prog, max_help_position=50, width=100),
+    )
+    parser.add_argument("program", help="Program: .cpp, .py lub .e (albo nazwa bez rozszerzenia).")
+    parser.add_argument(
+        "-i",
+        "--in",
+        dest="in_path",
+        help="Wejscie dla interaktora (domyslnie stdin).",
+    )
+    parser.add_argument(
+        "-o",
+        "--out",
+        dest="out_path",
+        help="Wyjscie dla interaktora (domyslnie stdout).",
+    )
+    parser.add_argument(
+        "-e",
+        "--err",
+        dest="err_path",
+        help="Plik na stderr wszystkich procesow (domyslnie terminal).",
+    )
+    parser.add_argument(
+        "-s",
+        "--soc",
+        dest="soc_path",
+        help=f"Wlasny interaktor (domyslnie {TASKID}soc).",
+    )
+    args = parser.parse_args()
+
+    # Ustalamy sciezki bazowe.
+    script_dir = Path(__file__).resolve().parent
+    cwd_dir = Path.cwd()
+    # Rozpoznajemy program uzytkownika.
+    program_path = resolve_program(args.program, cwd_dir)
+    # Rozpoznajemy interaktor; domyslnie TASKIDsoc.
+    if args.soc_path:
+        soc_path = resolve_program(args.soc_path, cwd_dir)
+    else:
+        soc_path = resolve_program(f"{TASKID}soc", script_dir)
+
+    # Budujemy komendy uruchomienia (kompilacja .cpp, uruchomienie .py/.e).
+    program_cmd = build_command(
+        program_path,
+        output_dir=script_dir,
+    )
+    soc_cmd = build_command(
+        soc_path,
+        output_dir=script_dir,
+    )
+
+    # Otwieramy plik stderr, jesli podano.
+    err_file = None
+    if args.err_path:
+        err_path = Path(args.err_path)
+        if not err_path.is_absolute():
+            err_path = cwd_dir / err_path
+        try:
+            err_file = open(err_path, "wb")
+        except OSError as e:
+            raise SystemExit(f"Blad: nie udalo sie otworzyc pliku stderr: {e}")
+
+    # Tworzymy N kopii programu i zestawiamy pipy do komunikacji.
+    pipes = []
+    procs = []
+    for _ in range(N):
+        # in_r/in_w: interaktor -> program, out_r/out_w: program -> interaktor.
+        try:
+            in_r, in_w = os.pipe()
+        except OSError as e:
+            cleanup_pipes(pipes)
+            terminate_procs(procs)
+            if err_file:
+                err_file.close()
+            raise SystemExit(f"Blad: nie udalo sie utworzyc pipe (in): {e}")
+        try:
+            out_r, out_w = os.pipe()
+        except OSError as e:
+            close_fd(in_r)
+            close_fd(in_w)
+            cleanup_pipes(pipes)
+            terminate_procs(procs)
+            if err_file:
+                err_file.close()
+            raise SystemExit(f"Blad: nie udalo sie utworzyc pipe (out): {e}")
+        # Uruchamiamy program i podpinamy mu konce rur.
+        try:
+            proc = subprocess.Popen(
+                program_cmd,
+                stdin=in_r,
+                stdout=out_w,
+                stderr=err_file if err_file else None,
+                cwd=script_dir,
+            )
+        except Exception as e:
+            close_fd(in_r)
+            close_fd(in_w)
+            close_fd(out_r)
+            close_fd(out_w)
+            cleanup_pipes(pipes)
+            terminate_procs(procs)
+            if err_file:
+                err_file.close()
+            raise SystemExit(f"Blad: nie udalo sie uruchomic programu: {e}")
+        procs.append(proc)
+        # W procesie rodzica zamykamy konce, ktorych juz nie uzyjemy.
+        os.close(in_r)
+        os.close(out_w)
+        pipes.append((out_r, in_w))
+
+    # Przygotowujemy argumenty interaktora i liste FD do przekazania.
+    interactor_args = soc_cmd + [str(N)]
+    pass_fds = []
+    # Przekazujemy FD: output programu -> input interaktora i odwrotnie.
+    for out_r, in_w in pipes:
+        interactor_args.append(str(out_r))
+        interactor_args.append(str(in_w))
+        pass_fds.extend([out_r, in_w])
+
+    # Opcjonalne przekierowanie wejscia/wyjscia interaktora.
+    in_file = None
+    out_file = None
+    try:
+        if args.in_path:
+            try:
+                in_file = open(args.in_path, "rb")
+            except OSError as e:
+                cleanup_pipes(pipes)
+                terminate_procs(procs)
+                raise SystemExit(f"Blad: nie udalo sie otworzyc wejscia interaktora: {e}")
+        if args.out_path:
+            try:
+                out_file = open(args.out_path, "wb")
+            except OSError as e:
+                cleanup_pipes(pipes)
+                terminate_procs(procs)
+                raise SystemExit(f"Blad: nie udalo sie otworzyc wyjscia interaktora: {e}")
+        # Uruchamiamy interaktor z przekazanymi deskryptorami.
+        try:
+            interactor = subprocess.Popen(
+                interactor_args,
+                stdin=in_file if in_file else None,
+                stdout=out_file if out_file else None,
+                stderr=err_file if err_file else None,
+                pass_fds=pass_fds,
+                cwd=script_dir,
+            )
+        except Exception as e:
+            cleanup_pipes(pipes)
+            terminate_procs(procs)
+            raise SystemExit(f"Blad: nie udalo sie uruchomic interaktora: {e}")
+    finally:
+        # Zamykamy deskryptory w procesie rodzica.
+        for out_r, in_w in pipes:
+            close_fd(out_r)
+            close_fd(in_w)
+        if in_file:
+            in_file.close()
+        if out_file:
+            out_file.close()
+        if err_file:
+            err_file.close()
+
+    # Czekamy na zakonczenie interaktora i programow.
+    rc_interactor = interactor.wait()
+    rc_programs = [p.wait() for p in procs]
+
+    # Klasyfikujemy kody wyjscia i stosujemy tablice werdyktow.
+    user_status = combined_user_status(rc_programs)
+    interactor_status = classify_rc(rc_interactor)
+
+    if user_status != 'ok' or interactor_status != 'ok':
+        print(
+                f"Blad wykonania programow:\n"
+                f"  Interaktor: {interactor_status} - {format_rc(rc_interactor)}\n"
+                f"  Program: {user_status}",
+                file=sys.stderr,
+            )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
