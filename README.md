@@ -23,4 +23,4 @@ All solutions are written in C++. In particular, each solution is stored as
 | olinfo     | https://training.olinfo.it/ | Empty  |
 | spoj       | https://www.spoj.com/       | Empty  |
 | szkopul    | https://szkopul.edu.pl/     | Done   |
-| yosupo     | https://judge.yosupo.jp/    | Empty  |
+| yosupo     | https://judge.yosupo.jp/    | Done   |
