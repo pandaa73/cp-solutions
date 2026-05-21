@@ -1,0 +1,26 @@
+## cp-solutions
+
+This repository contains some of the solutions to problems I have solved over
+the years, on various OJs. **Please do not abuse it**.
+
+All solutions are written in C++. In particular, each solution is stored as
+`JUDGE/TASK/solution.cpp`.
+
+### Current status
+
+- "Empty" means that no solved tasks have been added to this repository.
+- "In Progress" means that some solved tasks have been added to this repository.
+- "Done" means that all solved tasks have been added to this repository.
+
+| Judge      | URL                         | Status |
+|------------|-----------------------------|--------|
+| atcoder    | https://atcoder.jp/         | Empty  |
+| codeforces | https://codeforces.com/     | Empty  |
+| cses       | https://cses.fi/            | Empty  |
+| csacademy  | https://csacademy.com/      | Empty  |
+| kilonova   | https://kilonova.ro/        | Empty  |
+| ojuz       | https://oj.uz/              | Empty  |
+| olinfo     | https://training.olinfo.it/ | Empty  |
+| spoj       | https://www.spoj.com/       | Empty  |
+| szkopul    | https://szkopul.edu.pl/     | Empty  |
+| yosupo     | https://judge.yosupo.jp/    | Empty  |
