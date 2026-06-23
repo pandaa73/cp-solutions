@@ -21,6 +21,7 @@ All solutions are written in C++. In particular, each solution is stored as
 | kilonova   | https://kilonova.ro/        | Done   |
 | ojuz       | https://oj.uz/              | Done   |
 | olinfo     | https://training.olinfo.it/ | Empty  |
+| qoj        | https://qoj.ac/             | Done   |
 | spoj       | https://www.spoj.com/       | Empty  |
 | szkopul    | https://szkopul.edu.pl/     | Done   |
 | yosupo     | https://judge.yosupo.jp/    | Done   |
